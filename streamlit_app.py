@@ -5,65 +5,16 @@ import time
 import pandas as pd
 import streamlit as st
 
-# ---------- Page config (must be first Streamlit call) ----------
-st.set_page_config(
-    page_title="ABC News Spelling & Grammar Helper",
-    page_icon="📝",
-    layout="wide",
-)
+# ========================= Setup & Caching =========================
+st.set_page_config(page_title="SpellCheckr – News Spelling & Grammar", page_icon="✅", layout="wide")
 
-# ---------- Theme tweaks (colors you requested) ----------
-# bg: #1b3f7e  | inner blocks: #667ea8 | primary button: #c725cc | grey stays default
-st.markdown("""
-<style>
-/* Full app background */
-.stApp { background-color: #1b3f7e; }
-
-/* Headings / labels for contrast */
-h1, h2, h3, h4, h5, h6, label, .stMarkdown p, [data-testid="stSidebar"] * {
-  color: #ffffff !important;
-}
-
-/* Cards / containers (secondary background already set via theme) */
-section.main > div {}
-
-/* Inputs */
-textarea, .stTextInput input {
-  background-color: #667ea8 !important;
-  color: #ffffff !important;
-  border: 1px solid rgba(255,255,255,0.25) !important;
-  border-radius: 10px !important;
-}
-
-/* JSON viewer & code areas */
-[data-testid="stJson"] pre, code, pre {
-  background-color: #667ea8 !important;
-  color: #ffffff !important;
-  border-radius: 10px !important;
-}
-
-/* Primary buttons -> #c725cc; secondary keeps Streamlit grey */
-.stButton > button[kind="primary"]{
-  background-color:#c725cc !important;
-  color:#ffffff !important;
-  border:none !important;
-  border-radius:8px !important;
-}
-.stButton > button[kind="primary"]:hover{ filter: brightness(1.07); }
-
-/* Slider text color fix on dark bg */
-.css-10trblm, .css-50ug3q, .stSlider { color: #ffffff !important; }
-</style>
-""", unsafe_allow_html=True)
-
-# ---------------- NLTK stopwords (light + resilient) ----------------
+# ---- Lightweight stopwords (resilient) ----
 try:
     import nltk
     nltk.download("stopwords", quiet=True)
     from nltk.corpus import stopwords
     STOP_WORDS = set(stopwords.words("english"))
 except Exception:
-    # Fallback list if NLTK data can't be fetched at build/run time
     STOP_WORDS = {
         "a","an","and","the","is","are","was","were","to","of","in","on","for",
         "by","with","that","this","it","as","at","from","or","be","has","have",
@@ -71,10 +22,9 @@ except Exception:
         "can","could","should","may","might","about","into","over","after","before"
     }
 
-# ---------------- Optional grammar correction (public API) ----------------
+# ---- Optional LanguageTool (public API) ----
 @st.cache_resource(show_spinner=False)
 def _get_lt_tool():
-    """Load LanguageTool public API client once; return None if unavailable."""
     try:
         import language_tool_python
         return language_tool_python.LanguageToolPublicAPI("en-US")
@@ -92,20 +42,13 @@ def grammar_correct(text: str) -> str:
         matches = tool.check(text)
         return ltp.utils.correct(text, matches)
     except Exception:
-        # Fail gracefully if API is unavailable/rate-limited
         return text
 
-# ---------------- Data helpers ----------------
+# ========================= Data Helpers =========================
 def find_data_path() -> str:
-    """
-    Prefer a precomputed vocab .txt file; otherwise CSV(.gz).
-    Looks for abcnews_vocab.txt at the repo root first.
-    """
     candidates = [
-        # Vocab files (preferred)
         "abcnews_vocab.txt", "data/abcnews_vocab.txt",
         "vocab.txt", "data/vocab.txt",
-        # CSV fallbacks
         "abcnews-date-text.csv.gz", "data/abcnews-date-text.csv.gz",
         "abcnews-date-text.csv",    "data/abcnews-date-text.csv",
     ]
@@ -147,7 +90,7 @@ def build_vocab_from_csv(path: str, max_rows: int | None = None) -> set:
         df = df.head(max_rows)
     return _tokenize_to_vocab(df["headline_text"])
 
-# ---------------- Spell checker ----------------
+# ========================= Spell Checker Core =========================
 class NewsSpellChecker:
     def __init__(self, vocab: set):
         self.vocabulary = set(vocab)
@@ -232,7 +175,7 @@ class NewsSpellChecker:
                     out[t] = suggs
         return out
 
-# ---------------- Casing & punctuation preservation ----------------
+# ---- Casing & punctuation preservation ----
 def match_case(suggestion: str, original: str) -> str:
     if original.isupper():
         return suggestion.upper()
@@ -241,7 +184,7 @@ def match_case(suggestion: str, original: str) -> str:
     return suggestion
 
 def apply_corrections(raw_text: str, corrections: dict[str, list[tuple[str, float]]]) -> str:
-    parts = re.findall(r"\b\w+\b|[^\w\s]+|\s+", raw_text)  # words | punctuation | spaces
+    parts = re.findall(r"\b\w+\b|[^\w\s]+|\s+", raw_text)
     out_parts = []
     for p in parts:
         if re.fullmatch(r"\b\w+\b", p):
@@ -255,80 +198,197 @@ def apply_corrections(raw_text: str, corrections: dict[str, list[tuple[str, floa
             out_parts.append(p)
     return "".join(out_parts).strip()
 
-# ---------------- Bootstrap (prefer vocab .txt) ----------------
+# ========================= Bootstrap =========================
 @st.cache_resource(show_spinner=True)
 def load_checker():
     data_path = find_data_path()
     t0 = time.time()
-
     if data_path.lower().endswith(".txt"):
         vocab = load_vocab_from_txt(data_path)
         src = os.path.basename(data_path)
     else:
-        # Allow cap via Streamlit secrets or env var to speed first run on CSV
         env_max = st.secrets.get("VOCAB_MAX_ROWS", os.getenv("VOCAB_MAX_ROWS"))
         max_rows = int(env_max) if env_max and str(env_max).isdigit() else None
         vocab = build_vocab_from_csv(data_path, max_rows=max_rows)
         src = os.path.basename(data_path)
+    checker_ = NewsSpellChecker(vocab)
+    return checker_, len(vocab), src, time.time() - t0
 
-    checker = NewsSpellChecker(vocab)
-    return checker, len(vocab), src, time.time() - t0
+# Safe defaults so UI never crashes
+checker = None
+vocab_size = 0
+vocab_src = "Unknown"
+build_secs = 0.0
+try:
+    checker, vocab_size, vocab_src, build_secs = load_checker()
+except Exception as e:
+    st.warning(f"Vocabulary load failed: {e}. The UI will still render; corrections may be limited.")
 
-# Load resources once (needed before UI uses vocab_size/vocab_src)
-checker, vocab_size, vocab_src, build_secs = load_checker()
+# ========================= Polished UI (CSS + Hero + KPI) =========================
+st.markdown("""
+<style>
+:root{
+  --card:#ffffff; --muted:#6b7280; --border:#e5e7eb; --bg:#f6f7f9;
+  --ink:#0f172a; --accent:#2563eb;
+}
+.block-container{ padding-top:1.25rem; padding-bottom:2rem; overflow:visible; }
 
-# ---------------- UI (Gradio-like layout) ----------------
-st.title("ABC News Spell & Grammar Checker")
+/* HERO */
+.hero{
+  background: linear-gradient(135deg,#ffffff 0%, #f7fafc 40%, #eef2ff 100%);
+  border:1px solid var(--border);
+  border-radius:20px;
+  padding:28px 28px 22px;
+  margin-bottom:18px;
+  overflow:hidden;
+  position:relative;
+  box-shadow: 0 6px 22px rgba(16,24,40,.06);
+}
+.hero h1{ margin:0 0 6px 0; font-size:30px; font-weight:800; color:var(--ink); }
+.hero p{ margin:0; color:var(--muted); font-size:15px; }
 
-# Sidebar controls
+/* KPI cards */
+.kpi{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 16px; }
+.kpi h3{ margin:0; font-size:13px; font-weight:600; color:var(--muted); }
+.kpi p{ margin:4px 0 0; font-size:22px; font-weight:800; color:var(--ink); }
+
+/* Generic cards + tabs spacing */
+.card{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:18px; }
+.stTabs{ margin-top:6px; }
+.help{ color:var(--muted); font-size:13px; }
+
+/* Preview underlines */
+.preview{ background:#fff; border:1px solid var(--border); border-radius:12px; padding:14px 16px; line-height:1.65; }
+.preview .miss{ text-decoration: underline; text-decoration-color:#ef4444; text-decoration-thickness:3px; }
+
+/* Buttons */
+.stButton > button[kind="primary"]{ background:var(--ink); border-radius:10px; height:44px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ---- HERO ----
+st.markdown("""
+<div class="hero">
+  <h1>SpellCheckr</h1>
+  <p>News-tuned spelling & optional grammar correction. Paste text, get inline highlights and clean suggestions.</p>
+</div>
+""", unsafe_allow_html=True)
+
+# ---- KPI Row ----
+_vsize = locals().get("vocab_size", 0)
+_bsecs = locals().get("build_secs", 0.0)
+_issues = st.session_state.get("issues_count", 0)
+c1, c2, c3 = st.columns([1,1,1])
+with c1: st.markdown(f"""<div class="kpi"><h3>Vocabulary Size</h3><p>{_vsize:,}</p></div>""", unsafe_allow_html=True)
+with c2: st.markdown(f"""<div class="kpi"><h3>Build Time</h3><p>{_bsecs:.2f} s</p></div>""", unsafe_allow_html=True)
+with c3: st.markdown(f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{_issues}</p></div>""", unsafe_allow_html=True)
+
+st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+
+# ========================= Controls (Sidebar) =========================
 with st.sidebar:
-    st.subheader("Settings")
-    thr = st.slider("Confidence threshold", 0.50, 0.95, 0.70, 0.01)
-    topk = st.slider("Top-k suggestions per word", 1, 10, 5, 1)
-    do_grammar = st.checkbox("Apply grammar correction (LanguageTool API)", value=True)
-    st.caption(f"Vocabulary: **{vocab_size:,}** words • Source: **{vocab_src}** • Built in **{build_secs:.2f}s**")
+    st.header("Settings")
+    thr = st.slider("Confidence threshold", 0.50, 0.95, st.session_state.get("thr", 0.70), 0.01)
+    topk = st.slider("Top-k suggestions / word", 1, 10, st.session_state.get("topk", 5), 1)
+    do_grammar = st.checkbox("Apply grammar correction (LanguageTool API)", value=st.session_state.get("do_grammar", True))
+    st.caption(f"Vocabulary: **{vocab_size:,}** • Source: **{vocab_src}**")
+    st.session_state["thr"] = thr
+    st.session_state["topk"] = topk
+    st.session_state["do_grammar"] = do_grammar
 
-# Two-column layout (left: input + buttons, right: outputs)
-left, right = st.columns([1, 1], vertical_alignment="top")
-
+# ========================= Main Tabs =========================
+tabs = st.tabs(["✍️ Compose", "🔎 Results"])
 DEFAULT_TEXT = "Goverment annouced new polcy to strenghten educattion secttor after critcal report."
-if "input_text" not in st.session_state:
-    st.session_state.input_text = DEFAULT_TEXT
 
-with left:
-    st.markdown("Enter a News-style sentence to receive spelling and grammar suggestions.")
-    text = st.text_area("Input text", key="input_text", height=180, label_visibility="visible")
+with tabs[0]:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    c1, c2 = st.columns([2,1])
+    with c1:
+        text = st.text_area("Input text", value=st.session_state.get("last_text", DEFAULT_TEXT), height=180)
+    with c2:
+        uploaded = st.file_uploader("Upload .txt (optional)", type=["txt"])
+        if uploaded is not None:
+            content = uploaded.read().decode("utf-8", errors="ignore")
+            text = content
+            st.info("Loaded text from file.")
+        st.markdown('<div class="help">Tip: ⌘/Ctrl+A select • ⌘/Ctrl+C copy.</div>', unsafe_allow_html=True)
 
-    c1, c2 = st.columns(2)
-    clear_clicked = c1.button("Clear", type="secondary", use_container_width=True)
-    submit_clicked = c2.button("Submit", type="primary", use_container_width=True)
+    left, mid, right = st.columns([1,1,2])
+    with left:
+        run = st.button("Check & Correct", type="primary", use_container_width=True)
+    with mid:
+        clear = st.button("Reset", use_container_width=True)
+    with right:
+        st.empty()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    if clear_clicked:
-        st.session_state.input_text = ""
+    if clear:
+        for k in ["suggestions", "final_text", "issues_count", "last_text"]:
+            st.session_state.pop(k, None)
         st.rerun()
 
-with right:
-    if submit_clicked:
+    if run:
         if not text.strip():
             st.warning("Please enter some text.")
         else:
-            suggestions = checker.correct_text(text, thr=thr, topk=topk)
-            corrected = apply_corrections(text, suggestions)
-            final_text = grammar_correct(corrected) if do_grammar else corrected
+            if checker is None:
+                st.error("Spell checker vocabulary not loaded. Add a vocab file (abcnews_vocab.txt) or CSV to /data.")
+            else:
+                suggestions = checker.correct_text(text, thr=thr, topk=topk)
+                corrected = apply_corrections(text, suggestions)
+                final_text = grammar_correct(corrected) if do_grammar else corrected
 
-            st.subheader("Spelling Suggestions")
-            st.json({k: [(s, round(sc, 3)) for s, sc in v] for k, v in suggestions.items()})
+                st.session_state["last_text"] = text
+                st.session_state["suggestions"] = suggestions
+                st.session_state["final_text"] = final_text
+                st.session_state["issues_count"] = len(suggestions)
+                st.success("Analysis complete. Open the **Results** tab to review.")
+                st.rerun()
 
-            st.subheader("Corrected Sentence")
-            st.text_area("Corrected", value=corrected, height=80, label_visibility="collapsed")
+with tabs[1]:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    suggestions = st.session_state.get("suggestions", {})
+    final_text = st.session_state.get("final_text", "")
+    source_text = st.session_state.get("last_text", "")
 
-            if do_grammar:
-                st.subheader("Grammar-Corrected Sentence")
-                st.text_area("Grammar corrected", value=final_text, height=80, label_visibility="collapsed")
+    def build_preview_html(raw: str, miss: set[str]) -> str:
+        tokens = re.findall(r"\b\w+\b|[^\w\s]+|\s+", raw)
+        html_parts = []
+        for t in tokens:
+            if re.fullmatch(r"\b\w+\b", t) and t.lower() in miss:
+                html_parts.append(f'<span class="miss" title="See suggestions on the right">{t}</span>')
+            else:
+                html_parts.append(t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
+        return "<div class='preview'>" + "".join(html_parts) + "</div>"
 
-            st.download_button(
-                "Download corrected text",
-                data=final_text if do_grammar else corrected,
-                file_name="corrected.txt",
-                mime="text/plain",
-            )
+    miss_set = set(suggestions.keys())
+    colA, colB = st.columns([3, 2])
+    with colA:
+        st.subheader("Preview")
+        if source_text:
+            st.markdown(build_preview_html(source_text, miss_set), unsafe_allow_html=True)
+        else:
+            st.info("No input yet. Add text in **Compose** and run analysis.")
+
+    with colB:
+        st.subheader("Suggestions")
+        if not suggestions:
+            st.markdown('<div class="help">No issues found on last run.</div>', unsafe_allow_html=True)
+        else:
+            for wrong, suggs in suggestions.items():
+                chips = " ".join([f"<span class='badge'>{s} • {round(sc,3)}</span>" for s, sc in suggs])
+                st.markdown(f"**{wrong}**  \n{chips}", unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.subheader("Corrected Output")
+    if final_text:
+        st.text_area("Result", value=final_text, height=160)
+        st.download_button("Download corrected text", data=final_text, file_name="corrected.txt", mime="text/plain")
+    else:
+        st.markdown('<div class="help">Run analysis from the **Compose** tab to generate corrected output.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ========================= Footer =========================
+st.markdown("""
+<div class="help">© SpellCheckr • Portfolio demo. Inline highlights indicate suspected misspellings; suggestions are ranked by a blended similarity score.</div>
+""", unsafe_allow_html=True)
