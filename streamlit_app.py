@@ -228,7 +228,7 @@ checker, vocab_size, vocab_src, build_secs = load_checker()
 
 # ---------------- UI ----------------
 st.set_page_config(page_title="ABC News Spelling Helper", page_icon="📝", layout="centered")
-st.title("📝 ABC News Spelling & Grammar Helper")
+st.title("📝 News Spelling & Grammar Helper")
 
 with st.sidebar:
     st.subheader("Settings")
