@@ -195,7 +195,7 @@ def apply_corrections(raw_text: str, corrections: dict[str, list[tuple[str, floa
             out_parts.append(p)
     return "".join(out_parts).strip()
 
-# ---------------- Bootstrap ----------------
+# ---------------- Bootstrap (robust) ----------------
 @st.cache_resource(show_spinner=True)
 def load_checker():
     data_path = find_data_path()
@@ -208,10 +208,20 @@ def load_checker():
         max_rows = int(env_max) if env_max and str(env_max).isdigit() else None
         vocab = build_vocab_from_csv(data_path, max_rows=max_rows)
         src = os.path.basename(data_path)
-    checker = NewsSpellChecker(vocab)
-    return checker, len(vocab), src, time.time() - t0
+    checker_ = NewsSpellChecker(vocab)
+    return checker_, len(vocab), src, time.time() - t0
 
-checker, vocab_size, vocab_src, build_secs = load_checker()
+# Safe defaults (avoid NameError if load fails)
+checker = None
+vocab_size = 0
+vocab_src = "Unknown"
+build_secs = 0.0
+
+# Try to load; if it fails, keep the app usable
+try:
+    checker, vocab_size, vocab_src, build_secs = load_checker()
+except Exception as e:
+    st.warning(f"Vocabulary load failed: {e}. The UI will still render; corrections may be limited.")
 
 # ---------------- UI THEME / LAYOUT ----------------
 st.set_page_config(page_title="SpellCheckr – News Spelling & Grammar", page_icon="✅", layout="wide")
@@ -253,11 +263,9 @@ with st.container():
 </div>
 """, unsafe_allow_html=True)
 
-    # KPI row
     k1, k2, k3 = st.columns([1,1,1])
     with k1: st.markdown(f"""<div class="kpi"><h3>Vocabulary Size</h3><p>{vocab_size:,}</p></div>""", unsafe_allow_html=True)
     with k2: st.markdown(f"""<div class="kpi"><h3>Build Time</h3><p>{build_secs:.2f} s</p></div>""", unsafe_allow_html=True)
-    # Issues KPI updated after run (fallback 0 on first render)
     _issues = st.session_state.get("issues_count", 0)
     with k3: st.markdown(f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{_issues}</p></div>""", unsafe_allow_html=True)
 
@@ -268,7 +276,6 @@ with st.sidebar:
     topk = st.slider("Top-k suggestions / word", 1, 10, st.session_state.get("topk", 5), 1)
     do_grammar = st.checkbox("Apply grammar correction (LanguageTool API)", value=st.session_state.get("do_grammar", True))
     st.caption(f"Vocabulary: **{vocab_size:,}** • Source: **{vocab_src}**")
-    # persist
     st.session_state["thr"] = thr
     st.session_state["topk"] = topk
     st.session_state["do_grammar"] = do_grammar
@@ -281,15 +288,14 @@ with tabs[0]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     c1, c2 = st.columns([2,1])
     with c1:
-        text = st.text_area("Input text", value=st.session_state.get("last_text", DEFAULT_TEXT), height=180, label_visibility="visible")
+        text = st.text_area("Input text", value=st.session_state.get("last_text", DEFAULT_TEXT), height=180)
     with c2:
         uploaded = st.file_uploader("Upload .txt (optional)", type=["txt"])
         if uploaded is not None:
             content = uploaded.read().decode("utf-8", errors="ignore")
             text = content
             st.info("Loaded text from file.")
-
-        st.markdown('<div class="help">Tip: Shortcuts — ⌘/Ctrl+A to select, ⌘/Ctrl+C to copy.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="help">Tip: ⌘/Ctrl+A select • ⌘/Ctrl+C copy.</div>', unsafe_allow_html=True)
 
     left, mid, right = st.columns([1,1,2])
     with left:
@@ -301,26 +307,28 @@ with tabs[0]:
     st.markdown('</div>', unsafe_allow_html=True)
 
     if clear:
-        st.session_state.pop("suggestions", None)
-        st.session_state.pop("final_text", None)
-        st.session_state.pop("issues_count", None)
-        st.session_state["last_text"] = ""
-        st.experimental_rerun()
+        for k in ["suggestions", "final_text", "issues_count", "last_text"]:
+            st.session_state.pop(k, None)
+        st.rerun()
 
     if run:
         if not text.strip():
             st.warning("Please enter some text.")
         else:
-            suggestions = checker.correct_text(text, thr=thr, topk=topk)
-            corrected = apply_corrections(text, suggestions)
-            final_text = grammar_correct(corrected) if do_grammar else corrected
+            # If checker failed to load (missing data), keep app stable
+            if checker is None:
+                st.error("Spell checker vocabulary not loaded. Add a vocab file (abcnews_vocab.txt) or CSV to /data.")
+            else:
+                suggestions = checker.correct_text(text, thr=thr, topk=topk)
+                corrected = apply_corrections(text, suggestions)
+                final_text = grammar_correct(corrected) if do_grammar else corrected
 
-            st.session_state["last_text"] = text
-            st.session_state["suggestions"] = suggestions
-            st.session_state["final_text"] = final_text
-            st.session_state["issues_count"] = len(suggestions)
-            st.success("Analysis complete. Open the **Results** tab to review.")
-            st.experimental_rerun()
+                st.session_state["last_text"] = text
+                st.session_state["suggestions"] = suggestions
+                st.session_state["final_text"] = final_text
+                st.session_state["issues_count"] = len(suggestions)
+                st.success("Analysis complete. Open the **Results** tab to review.")
+                st.rerun()
 
 with tabs[1]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -328,15 +336,16 @@ with tabs[1]:
     final_text = st.session_state.get("final_text", "")
     source_text = st.session_state.get("last_text", "")
 
-    # Inline preview with red underline on misspelled words
     def build_preview_html(raw: str, miss: set[str]) -> str:
         tokens = re.findall(r"\b\w+\b|[^\w\s]+|\s+", raw)
         html_parts = []
         for t in tokens:
             if re.fullmatch(r"\b\w+\b", t) and t.lower() in miss:
-                html_parts.append(f'<span class="miss" title="Click suggestions below">{t}</span>')
+                html_parts.append(f'<span class="miss" title="See suggestions on the right">{t}</span>')
             else:
-                html_parts.append(t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
+                html_parts.append(
+                    t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+                )
         return "<div class='preview'>" + "".join(html_parts) + "</div>"
 
     miss_set = set(suggestions.keys())
@@ -368,5 +377,5 @@ with tabs[1]:
 
 # ---------------- FOOTER ----------------
 st.markdown("""
-<div class="footer-note">© SpellCheckr • Portfolio demo. Inline highlights indicate suspected misspellings; suggestions are ranked by blended similarity score.</div>
+<div class="footer-note">© SpellCheckr • Portfolio demo. Inline highlights indicate suspected misspellings; suggestions are ranked by a blended similarity score.</div>
 """, unsafe_allow_html=True)
