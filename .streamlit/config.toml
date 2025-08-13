@@ -1,0 +1,5 @@
+[theme]
+primaryColor = "#c725cc"            # buttons / accents
+backgroundColor = "#1b3f7e"         # page background
+secondaryBackgroundColor = "#667ea8" # cards / inputs background
+textColor = "#ffffff"
