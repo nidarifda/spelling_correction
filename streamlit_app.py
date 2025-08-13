@@ -364,7 +364,7 @@ with tabs[0]:
             content = uploaded.read().decode("utf-8", errors="ignore")
             text = content
             st.info("Loaded text from file.")
-        st.markdown('<div class="help">Tip: ⌘/Ctrl+A select • ⌘/Ctrl+C copy.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="help"> </div>', unsafe_allow_html=True)
 
     left, mid, right = st.columns([1,1,2])
     with left:
