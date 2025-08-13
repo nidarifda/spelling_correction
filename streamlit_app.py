@@ -277,7 +277,7 @@ with st.sidebar:
 st.markdown("""
 <div class="hero">
   <h1>SpellCheckr</h1>
-  <p>Paste your text on the left. Issues appear on the right. Preview & corrected output render below.</p>
+  <p>Enter your text below to check for spelling issues. Suggestions and corrections will appear alongside your input for quick review.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -391,4 +391,4 @@ with left:
         st.markdown('<div class="help">Run **Check & Correct** to generate the corrected output.</div>', unsafe_allow_html=True)
 
 # ========================= Footer =========================
-st.markdown("<div class='help'>© SpellCheckr • Portfolio demo. Inline highlights indicate suspected misspellings; suggestions are ranked by a blended similarity score.</div>", unsafe_allow_html=True)
+st.markdown("<div class='help'>© SpellCheckr • Portfolio demo. Misspelled words are highlighted inline, with ranked suggestions based on combined similarity metrics.</div>", unsafe_allow_html=True)
