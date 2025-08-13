@@ -2,14 +2,15 @@
 import os
 import re
 import time
-import io
 import pandas as pd
 import streamlit as st
 
-# ========================= Setup & Caching =========================
+# ========================= App Setup =========================
 st.set_page_config(page_title="SpellCheckr – News Spelling & Grammar", page_icon="✅", layout="wide")
 
-# ---- Lightweight stopwords (resilient) ----
+USER_DICT_FILE = "user_dict.txt"
+
+# ---- Stopwords (resilient) ----
 try:
     import nltk
     nltk.download("stopwords", quiet=True)
@@ -23,7 +24,7 @@ except Exception:
         "can","could","should","may","might","about","into","over","after","before"
     }
 
-# ---- Optional LanguageTool (public API) ----
+# ---- LanguageTool (optional) ----
 @st.cache_resource(show_spinner=False)
 def _get_lt_tool():
     try:
@@ -46,6 +47,18 @@ def grammar_correct(text: str) -> str:
         return text
 
 # ========================= Data Helpers =========================
+def load_user_dict() -> set:
+    if os.path.exists(USER_DICT_FILE):
+        with open(USER_DICT_FILE, "r", encoding="utf-8") as f:
+            return {w.strip().lower() for w in f if w.strip()}
+    return set()
+
+def save_to_user_dict(new_words: set[str]):
+    words = load_user_dict().union({w.lower() for w in new_words if w.strip()})
+    with open(USER_DICT_FILE, "w", encoding="utf-8") as f:
+        for w in sorted(words):
+            f.write(w + "\n")
+
 def find_data_path() -> str:
     candidates = [
         "abcnews_vocab.txt", "data/abcnews_vocab.txt",
@@ -91,7 +104,7 @@ def build_vocab_from_csv(path: str, max_rows: int | None = None) -> set:
         df = df.head(max_rows)
     return _tokenize_to_vocab(df["headline_text"])
 
-# ========================= Spell Checker Core =========================
+# ========================= Spell Checker =========================
 class NewsSpellChecker:
     def __init__(self, vocab: set):
         self.vocabulary = set(vocab)
@@ -176,12 +189,10 @@ class NewsSpellChecker:
                     out[t] = suggs
         return out
 
-# ---- Casing & punctuation preservation ----
+# ---- Case & punctuation ----
 def match_case(suggestion: str, original: str) -> str:
-    if original.isupper():
-        return suggestion.upper()
-    if original and original[0].isupper():
-        return suggestion.capitalize()
+    if original.isupper(): return suggestion.upper()
+    if original and original[0].isupper(): return suggestion.capitalize()
     return suggestion
 
 def apply_corrections(raw_text: str, corrections: dict[str, list[tuple[str, float]]]) -> str:
@@ -199,7 +210,7 @@ def apply_corrections(raw_text: str, corrections: dict[str, list[tuple[str, floa
             out_parts.append(p)
     return "".join(out_parts).strip()
 
-# ========================= Bootstrap (base vocabulary) =========================
+# ========================= Bootstrap =========================
 @st.cache_resource(show_spinner=True)
 def load_checker():
     data_path = find_data_path()
@@ -212,263 +223,172 @@ def load_checker():
         max_rows = int(env_max) if env_max and str(env_max).isdigit() else None
         vocab = build_vocab_from_csv(data_path, max_rows=max_rows)
         src = os.path.basename(data_path)
-    checker_ = NewsSpellChecker(vocab)
-    return checker_, len(vocab), src, time.time() - t0
 
-# Safe defaults so UI never crashes
+    # merge user dictionary
+    vocab = set(vocab).union(load_user_dict())
+    checker_ = NewsSpellChecker(vocab)
+    return checker_, src, time.time() - t0
+
 checker = None
-vocab_size = 0
 vocab_src = "Unknown"
 build_secs = 0.0
 try:
-    checker, vocab_size, vocab_src, build_secs = load_checker()
+    checker, vocab_src, build_secs = load_checker()
 except Exception as e:
     st.warning(f"Vocabulary load failed: {e}. The UI will still render; corrections may be limited.")
 
-# ========================= Polished UI (CSS + Hero + KPI) =========================
+# ========================= Styles =========================
 st.markdown("""
 <style>
-:root{
-  --card:#ffffff; --muted:#6b7280; --border:#e5e7eb; --bg:#f6f7f9;
-  --ink:#0f172a; --accent:#2563eb;
-}
-.block-container{ padding-top:1.25rem; padding-bottom:2rem; overflow:visible; }
+:root{ --card:#fff; --muted:#6b7280; --border:#e5e7eb; --ink:#0f172a; }
+.block-container{ padding-top:1.0rem; padding-bottom:2rem; overflow:visible; }
 
-/* HERO */
-.hero{
-  background: linear-gradient(135deg,#ffffff 0%, #f7fafc 40%, #eef2ff 100%);
-  border:1px solid var(--border);
-  border-radius:20px;
-  padding:28px 28px 22px;
-  margin-bottom:18px;
-  overflow:hidden;
-  position:relative;
-  box-shadow: 0 6px 22px rgba(16,24,40,.06);
-}
-.hero h1{ margin:0 0 6px 0; font-size:30px; font-weight:800; color:var(--ink); }
-.hero p{ margin:0; color:var(--muted); font-size:15px; }
+/* Hero */
+.hero{ background:linear-gradient(135deg,#ffffff 0%,#f7fafc 40%,#eef2ff 100%);
+  border:1px solid var(--border); border-radius:20px; padding:22px 24px 18px;
+  margin-bottom:16px; box-shadow:0 6px 22px rgba(16,24,40,.06); }
+.hero h1{ margin:0 0 6px 0; font-size:28px; font-weight:800; color:var(--ink); }
+.hero p{ margin:0; color:var(--muted); font-size:14px; }
 
-/* KPI cards */
-.kpi{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 16px; }
+.card{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px; }
+.kpi{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px; }
 .kpi h3{ margin:0; font-size:13px; font-weight:600; color:var(--muted); }
-.kpi p{ margin:4px 0 0; font-size:22px; font-weight:800; color:var(--ink); }
+.kpi p{ margin:6px 0 0; font-size:26px; font-weight:800; color:var(--ink); }
 
-/* Generic cards + tabs spacing */
-.card{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:18px; }
-.stTabs{ margin-top:6px; }
-.help{ color:var(--muted); font-size:13px; }
-
-/* Preview underlines */
 .preview{ background:#fff; border:1px solid var(--border); border-radius:12px; padding:14px 16px; line-height:1.65; }
 .preview .miss{ text-decoration: underline; text-decoration-color:#ef4444; text-decoration-thickness:3px; }
-
-/* Buttons */
-.stButton > button[kind="primary"]{ background:var(--ink); border-radius:10px; height:44px; }
-
-/* Score heat for suggestion chips */
-.badge{
-  display:inline-block; padding:4px 10px; border:1px solid var(--border);
-  border-radius:999px; font-size:12px; margin:2px 6px 2px 0;
-}
-.badge[data-score="high"]{ background:#eef6ff; }
-.badge[data-score="mid"]{ background:#f5f7ff; }
-.badge[data-score="low"]{ background:#fafafa; }
+.badge{ display:inline-block; background:#f1f5f9; border:1px solid #e2e8f0; color:#0f172a;
+  padding:4px 8px; border-radius:999px; font-size:12px; margin:2px 6px 2px 0; }
+.help{ color:var(--muted); font-size:13px; }
+.stButton > button[kind="primary"]{ background:#0f172a; border-radius:10px; height:44px; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---- HERO ----
-st.markdown("""
-<div class="hero">
-  <h1>SpellCheckr</h1>
-  <p>News-tuned spelling & optional grammar correction. Paste text, get inline highlights and clean suggestions.</p>
-</div>
-""", unsafe_allow_html=True)
-
-# ---- KPI Row ----
-_vsize = locals().get("vocab_size", 0)
-_bsecs = locals().get("build_secs", 0.0)
-_issues = st.session_state.get("issues_count", 0)
-c1, c2, c3 = st.columns([1,1,1])
-with c1: st.markdown(f"""<div class="kpi"><h3>Vocabulary Size</h3><p>{_vsize:,}</p></div>""", unsafe_allow_html=True)
-with c2: st.markdown(f"""<div class="kpi"><h3>Build Time</h3><p>{_bsecs:.2f} s</p></div>""", unsafe_allow_html=True)
-with c3: st.markdown(f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{_issues}</p></div>""", unsafe_allow_html=True)
-
-st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-
-# ========================= Controls (Sidebar) =========================
-# Personal dictionary state
-if "user_dict" not in st.session_state:
-    st.session_state["user_dict"] = set()
-
+# ========================= Sidebar (Settings) =========================
 with st.sidebar:
     st.header("Settings")
     thr = st.slider("Confidence threshold", 0.50, 0.95, st.session_state.get("thr", 0.70), 0.01)
     topk = st.slider("Top-k suggestions / word", 1, 10, st.session_state.get("topk", 5), 1)
     do_grammar = st.checkbox("Apply grammar correction (LanguageTool API)", value=st.session_state.get("do_grammar", True))
+    st.caption(f"Source: **{vocab_src}** • Build: **{build_secs:.2f}s**")
+    st.session_state.update({"thr":thr, "topk":topk, "do_grammar":do_grammar})
 
-    st.divider()
-    st.subheader("Personal Dictionary")
-    add_word = st.text_input("Add a word", placeholder="ProperName, product, acronym...")
-    col_add, col_clear = st.columns(2)
-    with col_add:
-        if st.button("➕ Add word", use_container_width=True, disabled=not add_word.strip()):
-            st.session_state["user_dict"].add(add_word.strip().lower())
-            st.success(f"Added '{add_word.strip()}' to dictionary.")
-            st.rerun()
-    with col_clear:
-        if st.button("🗑️ Clear dictionary", use_container_width=True, type="secondary", disabled=len(st.session_state["user_dict"]) == 0):
-            st.session_state["user_dict"].clear()
-            st.info("Personal dictionary cleared.")
-            st.rerun()
+# ========================= Hero =========================
+st.markdown("""
+<div class="hero">
+  <h1>SpellCheckr</h1>
+  <p>Paste your text on the left. Issues appear on the right. Preview & corrected output render below.</p>
+</div>
+""", unsafe_allow_html=True)
 
-    dict_file = st.file_uploader("Upload .txt (one word per line)", type=["txt"])
-    if dict_file is not None:
-        try:
-            txt = dict_file.read().decode("utf-8", errors="ignore")
-            words = {w.strip().lower() for w in txt.splitlines() if w.strip()}
-            st.session_state["user_dict"].update(words)
-            st.success(f"Loaded {len(words):,} words into dictionary.")
-        except Exception as e:
-            st.error(f"Failed to load dictionary: {e}")
-
-    st.caption(f"Vocabulary: **{vocab_size:,}** • Source: **{vocab_src}** • Custom: **{len(st.session_state['user_dict']):,}**")
-    st.session_state["thr"] = thr
-    st.session_state["topk"] = topk
-    st.session_state["do_grammar"] = do_grammar
-
-# ========================= Main Tabs =========================
-tabs = st.tabs(["✍️ Compose", "🔎 Results"])
+# ========================= Main Two-Column Layout =========================
 DEFAULT_TEXT = "Goverment annouced new polcy to strenghten educattion secttor after critcal report."
+if "last_text" not in st.session_state:
+    st.session_state["last_text"] = DEFAULT_TEXT
 
-# Helper to build a checker that includes personal dictionary (cheap union)
-def ensure_user_words():
-    if checker is None:
-        return None
-    if st.session_state["user_dict"]:
-        # mutate cached checker safely: update only if new words appear
-        missing = [w for w in st.session_state["user_dict"] if w not in checker.vocabulary]
-        if missing:
-            checker.vocabulary.update(missing)
-            for w in missing:
-                checker.by_first.setdefault(w[0], []).append(w)
-    return checker
+left, right = st.columns([2, 1], vertical_alignment="top")
 
-with tabs[0]:
+# ---------- LEFT: Input (top) + Preview (below) + Corrected Output (below) ----------
+with left:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    c1, c2 = st.columns([2,1])
-    with c1:
-        text = st.text_area("Input text", value=st.session_state.get("last_text", DEFAULT_TEXT), height=180)
-    with c2:
-        uploaded = st.file_uploader("Upload .txt (optional)", type=["txt"])
-        if uploaded is not None:
-            content = uploaded.read().decode("utf-8", errors="ignore")
-            text = content
-            st.info("Loaded text from file.")
-        st.markdown('<div class="help"> </div>', unsafe_allow_html=True)
-
-    left, mid, right = st.columns([1,1,2])
-    with left:
-        run = st.button("Check & Correct", type="primary", use_container_width=True)
-    with mid:
-        clear = st.button("Reset", use_container_width=True)
-    with right:
-        st.empty()
+    text = st.text_area("Input text", value=st.session_state["last_text"], height=180, key="input_text")
+    c1, c2 = st.columns([1,1])
+    run = c1.button("Check & Correct", type="primary", use_container_width=True)
+    clear = c2.button("Reset", use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    if clear:
-        for k in ["suggestions", "final_text", "issues_count", "last_text"]:
-            st.session_state.pop(k, None)
+    # Preview will be rendered after processing; placeholder for layout
+    preview_container = st.container()
+    corrected_container = st.container()
+
+# ---------- RIGHT: Issues box (top) + Suggestions (below) ----------
+with right:
+    # Issues Detected (last run)
+    issues = st.session_state.get("issues_count", 0)
+    st.markdown(f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{issues}</p></div>""", unsafe_allow_html=True)
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Suggestions")
+    suggestions = st.session_state.get("suggestions", {})
+    if not suggestions:
+        st.markdown('<div class="help">No issues found on last run.</div>', unsafe_allow_html=True)
+        add_select = []
+    else:
+        for wrong, suggs in suggestions.items():
+            chips = " ".join([f"<span class='badge'>{s} • {round(sc,3)}</span>" for s, sc in suggs])
+            st.markdown(f"**{wrong}**  \n{chips}", unsafe_allow_html=True)
+
+        # Add to dictionary (below suggestions)
+        add_select = st.multiselect(
+            "Add words to custom dictionary:",
+            options=sorted(list(suggestions.keys())),
+            placeholder="Select words to remember"
+        )
+        if st.button("Add selected", use_container_width=True):
+            save_to_user_dict(set(add_select))
+            st.success(f"Added {len(add_select)} word(s) to user_dict.txt")
+            # refresh checker to include new words
+            load_checker.clear()              # clear cached resource
+            checker, vocab_src, build_secs = load_checker()
+            # re-run to re-evaluate with updated vocab
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ========================= Run / Reset Actions =========================
+if clear:
+    for k in ["suggestions", "final_text", "issues_count", "last_text"]:
+        st.session_state.pop(k, None)
+    st.session_state["last_text"] = DEFAULT_TEXT
+    st.rerun()
+
+if run:
+    if not st.session_state["input_text"].strip():
+        st.warning("Please enter some text.")
+    elif checker is None:
+        st.error("Spell checker vocabulary not loaded. Add a vocab file (abcnews_vocab.txt) or CSV to /data.")
+    else:
+        thr = st.session_state["thr"]; topk = st.session_state["topk"]
+        suggestions = checker.correct_text(st.session_state["input_text"], thr=thr, topk=topk)
+        corrected = apply_corrections(st.session_state["input_text"], suggestions)
+        final_text = grammar_correct(corrected) if st.session_state["do_grammar"] else corrected
+
+        st.session_state.update({
+            "last_text": st.session_state["input_text"],
+            "suggestions": suggestions,
+            "final_text": final_text,
+            "issues_count": len(suggestions),
+        })
         st.rerun()
 
-    if run:
-        if not text.strip():
-            st.warning("Please enter some text.")
+# ========================= Render Preview & Corrected Output (below input) =========================
+def build_preview_html(raw: str, miss: set[str]) -> str:
+    tokens = re.findall(r"\b\w+\b|[^\w\s]+|\s+", raw)
+    html_parts = []
+    for t in tokens:
+        if re.fullmatch(r"\b\w+\b", t) and t.lower() in miss:
+            html_parts.append(f'<span class="miss" title="See suggestions on the right">{t}</span>')
         else:
-            active_checker = ensure_user_words()
-            if active_checker is None:
-                st.error("Spell checker vocabulary not loaded. Add a vocab file (abcnews_vocab.txt) or CSV to /data.")
-            else:
-                suggestions = active_checker.correct_text(text, thr=thr, topk=topk)
-                corrected = apply_corrections(text, suggestions)
-                final_text = grammar_correct(corrected) if do_grammar else corrected
+            html_parts.append(t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
+    return "<div class='preview'>" + "".join(html_parts) + "</div>"
 
-                st.session_state["last_text"] = text
-                st.session_state["suggestions"] = suggestions
-                st.session_state["final_text"] = final_text
-                st.session_state["issues_count"] = len(suggestions)
-                st.success("Analysis complete. Open the **Results** tab to review.")
-                st.rerun()
+with left:
+    # Result preview (below input)
+    st.subheader("Preview")
+    src_text = st.session_state.get("last_text", "")
+    miss_set = set(st.session_state.get("suggestions", {}).keys())
+    if src_text:
+        st.markdown(build_preview_html(src_text, miss_set), unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="help">No input yet. Enter text above and run.</div>', unsafe_allow_html=True)
 
-with tabs[1]:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    suggestions = st.session_state.get("suggestions", {})
-    final_text = st.session_state.get("final_text", "")
-    source_text = st.session_state.get("last_text", "")
-
-    def build_preview_html(raw: str, miss: set[str]) -> str:
-        tokens = re.findall(r"\b\w+\b|[^\w\s]+|\s+", raw)
-        html_parts = []
-        for t in tokens:
-            if re.fullmatch(r"\b\w+\b", t) and t.lower() in miss:
-                html_parts.append(f'<span class="miss" title="See suggestions on the right">{t}</span>')
-            else:
-                html_parts.append(t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
-        return "<div class='preview'>" + "".join(html_parts) + "</div>"
-
-    miss_set = set(suggestions.keys())
-    colA, colB = st.columns([3, 2])
-
-    with colA:
-        st.subheader("Preview")
-        if source_text:
-            st.markdown(build_preview_html(source_text, miss_set), unsafe_allow_html=True)
-        else:
-            st.info("No input yet. Add text in **Compose** and run analysis.")
-
-    with colB:
-        st.subheader("Suggestions")
-        if not suggestions:
-            st.markdown('<div class="help">No issues found on last run.</div>', unsafe_allow_html=True)
-        else:
-            # Buttons to add words directly to dictionary
-            for idx, (wrong, suggs) in enumerate(suggestions.items()):
-                # score heat label
-                def score_tag(sc: float) -> str:
-                    return "high" if sc >= 0.85 else ("mid" if sc >= 0.75 else "low")
-                chips = " ".join([
-                    f"<span class='badge' data-score='{score_tag(sc)}'>{s} • {round(sc,3)}</span>"
-                    for s, sc in suggs
-                ])
-                c_left, c_right = st.columns([2,1])
-                with c_left:
-                    st.markdown(f"**{wrong}**  \n{chips}", unsafe_allow_html=True)
-                with c_right:
-                    if st.button("Add to dictionary", key=f"add_{idx}", use_container_width=True):
-                        st.session_state["user_dict"].add(wrong.lower())
-                        st.toast(f"'{wrong}' added to personal dictionary.")
-                        st.rerun()
-
-            # Download suggestions as CSV
-            df_rows = []
-            for wrong, suggs in suggestions.items():
-                for s, sc in suggs:
-                    df_rows.append({"word": wrong, "suggestion": s, "score": round(sc, 6)})
-            if df_rows:
-                df = pd.DataFrame(df_rows)
-                buf = io.StringIO()
-                df.to_csv(buf, index=False)
-                st.download_button("Download suggestions (CSV)", data=buf.getvalue(), file_name="suggestions.csv", mime="text/csv")
-
-    st.markdown("---")
+    # Corrected output (below preview)
     st.subheader("Corrected Output")
+    final_text = st.session_state.get("final_text", "")
     if final_text:
-        st.text_area("Result", value=final_text, height=160)
+        st.text_area("Result", value=final_text, height=160, key="final_text_area")
         st.download_button("Download corrected text", data=final_text, file_name="corrected.txt", mime="text/plain")
     else:
-        st.markdown('<div class="help">Run analysis from the **Compose** tab to generate corrected output.</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="help">Run **Check & Correct** to generate the corrected output.</div>', unsafe_allow_html=True)
 
 # ========================= Footer =========================
-st.markdown("""
-<div class="help">© SpellCheckr • Portfolio demo. Inline highlights indicate suspected misspellings; suggestions are ranked by a blended similarity score. Personal dictionary persists for this session.</div>
-""", unsafe_allow_html=True)
+st.markdown("<div class='help'>© SpellCheckr • Portfolio demo. Inline highlights indicate suspected misspellings; suggestions are ranked by a blended similarity score.</div>", unsafe_allow_html=True)
