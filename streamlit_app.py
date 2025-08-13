@@ -50,19 +50,28 @@ def _exists(path: str) -> bool:
 def find_data_path() -> str:
     """
     Prefer a precomputed vocab file; otherwise CSV(.gz).
+    Looks for abcnews_vocab.txt at repo root (your choice).
     """
     candidates = [
-        "data/vocab.txt", "vocab.txt",
-        "data/abcnews-date-text.csv.gz", "abcnews-date-text.csv.gz",
-        "data/abcnews-date-text.csv", "abcnews-date-text.csv",
+        # vocab files (preferred)
+        "abcnews_vocab.txt",          # <— your file at repo root
+        "data/abcnews_vocab.txt",
+        "vocab.txt",
+        "data/vocab.txt",
+        # CSV fallbacks
+        "abcnews-date-text.csv.gz",
+        "data/abcnews-date-text.csv.gz",
+        "abcnews-date-text.csv",
+        "data/abcnews-date-text.csv",
     ]
     for p in candidates:
-        if _exists(p):
+        if os.path.exists(p):
             return p
     raise FileNotFoundError(
-        "No data found. Add data/vocab.txt (recommended) or "
-        "data/abcnews-date-text.csv[.gz] to the repo."
+        "No data found. Add abcnews_vocab.txt (preferred) to the repo root, "
+        "or a CSV at abcnews-date-text.csv[.gz]."
     )
+
 
 @st.cache_data(show_spinner=True)
 def load_vocab_from_txt(path: str):
@@ -204,22 +213,24 @@ def apply_corrections(raw_text: str, corrections: dict) -> str:
 
 # ---------------- Bootstrap (prefer vocab.txt) ----------------
 @st.cache_resource(show_spinner=True)
+@st.cache_resource(show_spinner=True)
 def load_checker():
     data_path = find_data_path()
     t0 = time.time()
-    if data_path.endswith("vocab.txt"):
+
+    if data_path.lower().endswith(".txt"):
         vocab = load_vocab_from_txt(data_path)
-        src = "vocab.txt"
+        src = os.path.basename(data_path)
     else:
         # Allow cap via Streamlit secrets or env var to speed first run on CSV
         env_max = st.secrets.get("VOCAB_MAX_ROWS", os.getenv("VOCAB_MAX_ROWS"))
         max_rows = int(env_max) if env_max and str(env_max).isdigit() else None
         vocab = build_vocab_from_csv(data_path, max_rows=max_rows)
         src = os.path.basename(data_path)
+
     checker = NewsSpellChecker(vocab)
     return checker, len(vocab), src, time.time() - t0
 
-checker, vocab_size, vocab_src, build_secs = load_checker()
 
 # ---------------- UI ----------------
 st.set_page_config(page_title="ABC News Spelling Helper", page_icon="📝", layout="centered")
