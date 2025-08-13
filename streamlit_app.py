@@ -2,6 +2,7 @@
 import os
 import re
 import time
+import io
 import pandas as pd
 import streamlit as st
 
@@ -198,7 +199,7 @@ def apply_corrections(raw_text: str, corrections: dict[str, list[tuple[str, floa
             out_parts.append(p)
     return "".join(out_parts).strip()
 
-# ========================= Bootstrap =========================
+# ========================= Bootstrap (base vocabulary) =========================
 @st.cache_resource(show_spinner=True)
 def load_checker():
     data_path = find_data_path()
@@ -263,6 +264,15 @@ st.markdown("""
 
 /* Buttons */
 .stButton > button[kind="primary"]{ background:var(--ink); border-radius:10px; height:44px; }
+
+/* Score heat for suggestion chips */
+.badge{
+  display:inline-block; padding:4px 10px; border:1px solid var(--border);
+  border-radius:999px; font-size:12px; margin:2px 6px 2px 0;
+}
+.badge[data-score="high"]{ background:#eef6ff; }
+.badge[data-score="mid"]{ background:#f5f7ff; }
+.badge[data-score="low"]{ background:#fafafa; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -286,12 +296,42 @@ with c3: st.markdown(f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>
 st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
 # ========================= Controls (Sidebar) =========================
+# Personal dictionary state
+if "user_dict" not in st.session_state:
+    st.session_state["user_dict"] = set()
+
 with st.sidebar:
     st.header("Settings")
     thr = st.slider("Confidence threshold", 0.50, 0.95, st.session_state.get("thr", 0.70), 0.01)
     topk = st.slider("Top-k suggestions / word", 1, 10, st.session_state.get("topk", 5), 1)
     do_grammar = st.checkbox("Apply grammar correction (LanguageTool API)", value=st.session_state.get("do_grammar", True))
-    st.caption(f"Vocabulary: **{vocab_size:,}** • Source: **{vocab_src}**")
+
+    st.divider()
+    st.subheader("Personal Dictionary")
+    add_word = st.text_input("Add a word", placeholder="ProperName, product, acronym...")
+    col_add, col_clear = st.columns(2)
+    with col_add:
+        if st.button("➕ Add word", use_container_width=True, disabled=not add_word.strip()):
+            st.session_state["user_dict"].add(add_word.strip().lower())
+            st.success(f"Added '{add_word.strip()}' to dictionary.")
+            st.rerun()
+    with col_clear:
+        if st.button("🗑️ Clear dictionary", use_container_width=True, type="secondary", disabled=len(st.session_state["user_dict"]) == 0):
+            st.session_state["user_dict"].clear()
+            st.info("Personal dictionary cleared.")
+            st.rerun()
+
+    dict_file = st.file_uploader("Upload .txt (one word per line)", type=["txt"])
+    if dict_file is not None:
+        try:
+            txt = dict_file.read().decode("utf-8", errors="ignore")
+            words = {w.strip().lower() for w in txt.splitlines() if w.strip()}
+            st.session_state["user_dict"].update(words)
+            st.success(f"Loaded {len(words):,} words into dictionary.")
+        except Exception as e:
+            st.error(f"Failed to load dictionary: {e}")
+
+    st.caption(f"Vocabulary: **{vocab_size:,}** • Source: **{vocab_src}** • Custom: **{len(st.session_state['user_dict']):,}**")
     st.session_state["thr"] = thr
     st.session_state["topk"] = topk
     st.session_state["do_grammar"] = do_grammar
@@ -299,6 +339,19 @@ with st.sidebar:
 # ========================= Main Tabs =========================
 tabs = st.tabs(["✍️ Compose", "🔎 Results"])
 DEFAULT_TEXT = "Goverment annouced new polcy to strenghten educattion secttor after critcal report."
+
+# Helper to build a checker that includes personal dictionary (cheap union)
+def ensure_user_words():
+    if checker is None:
+        return None
+    if st.session_state["user_dict"]:
+        # mutate cached checker safely: update only if new words appear
+        missing = [w for w in st.session_state["user_dict"] if w not in checker.vocabulary]
+        if missing:
+            checker.vocabulary.update(missing)
+            for w in missing:
+                checker.by_first.setdefault(w[0], []).append(w)
+    return checker
 
 with tabs[0]:
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -331,10 +384,11 @@ with tabs[0]:
         if not text.strip():
             st.warning("Please enter some text.")
         else:
-            if checker is None:
+            active_checker = ensure_user_words()
+            if active_checker is None:
                 st.error("Spell checker vocabulary not loaded. Add a vocab file (abcnews_vocab.txt) or CSV to /data.")
             else:
-                suggestions = checker.correct_text(text, thr=thr, topk=topk)
+                suggestions = active_checker.correct_text(text, thr=thr, topk=topk)
                 corrected = apply_corrections(text, suggestions)
                 final_text = grammar_correct(corrected) if do_grammar else corrected
 
@@ -363,6 +417,7 @@ with tabs[1]:
 
     miss_set = set(suggestions.keys())
     colA, colB = st.columns([3, 2])
+
     with colA:
         st.subheader("Preview")
         if source_text:
@@ -375,9 +430,34 @@ with tabs[1]:
         if not suggestions:
             st.markdown('<div class="help">No issues found on last run.</div>', unsafe_allow_html=True)
         else:
+            # Buttons to add words directly to dictionary
+            for idx, (wrong, suggs) in enumerate(suggestions.items()):
+                # score heat label
+                def score_tag(sc: float) -> str:
+                    return "high" if sc >= 0.85 else ("mid" if sc >= 0.75 else "low")
+                chips = " ".join([
+                    f"<span class='badge' data-score='{score_tag(sc)}'>{s} • {round(sc,3)}</span>"
+                    for s, sc in suggs
+                ])
+                c_left, c_right = st.columns([2,1])
+                with c_left:
+                    st.markdown(f"**{wrong}**  \n{chips}", unsafe_allow_html=True)
+                with c_right:
+                    if st.button("Add to dictionary", key=f"add_{idx}", use_container_width=True):
+                        st.session_state["user_dict"].add(wrong.lower())
+                        st.toast(f"'{wrong}' added to personal dictionary.")
+                        st.rerun()
+
+            # Download suggestions as CSV
+            df_rows = []
             for wrong, suggs in suggestions.items():
-                chips = " ".join([f"<span class='badge'>{s} • {round(sc,3)}</span>" for s, sc in suggs])
-                st.markdown(f"**{wrong}**  \n{chips}", unsafe_allow_html=True)
+                for s, sc in suggs:
+                    df_rows.append({"word": wrong, "suggestion": s, "score": round(sc, 6)})
+            if df_rows:
+                df = pd.DataFrame(df_rows)
+                buf = io.StringIO()
+                df.to_csv(buf, index=False)
+                st.download_button("Download suggestions (CSV)", data=buf.getvalue(), file_name="suggestions.csv", mime="text/csv")
 
     st.markdown("---")
     st.subheader("Corrected Output")
@@ -390,5 +470,5 @@ with tabs[1]:
 
 # ========================= Footer =========================
 st.markdown("""
-<div class="help">© SpellCheckr • Portfolio demo. Inline highlights indicate suspected misspellings; suggestions are ranked by a blended similarity score.</div>
+<div class="help">© SpellCheckr • Portfolio demo. Inline highlights indicate suspected misspellings; suggestions are ranked by a blended similarity score. Personal dictionary persists for this session.</div>
 """, unsafe_allow_html=True)
