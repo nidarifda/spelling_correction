@@ -41,28 +41,22 @@ def grammar_correct(text: str) -> str:
         matches = tool.check(text)
         return ltp.utils.correct(text, matches)
     except Exception:
+        # Fail gracefully if API is unavailable/rate-limited
         return text
 
 # ---------------- Data helpers ----------------
-def _exists(path: str) -> bool:
-    return os.path.exists(path)
-
 def find_data_path() -> str:
     """
-    Prefer a precomputed vocab file; otherwise CSV(.gz).
-    Looks for abcnews_vocab.txt at repo root (your choice).
+    Prefer a precomputed vocab .txt file; otherwise CSV(.gz).
+    Looks for abcnews_vocab.txt at the repo root first.
     """
     candidates = [
-        # vocab files (preferred)
-        "abcnews_vocab.txt",          # <— your file at repo root
-        "data/abcnews_vocab.txt",
-        "vocab.txt",
-        "data/vocab.txt",
+        # Vocab files (preferred)
+        "abcnews_vocab.txt", "data/abcnews_vocab.txt",
+        "vocab.txt", "data/vocab.txt",
         # CSV fallbacks
-        "abcnews-date-text.csv.gz",
-        "data/abcnews-date-text.csv.gz",
-        "abcnews-date-text.csv",
-        "data/abcnews-date-text.csv",
+        "abcnews-date-text.csv.gz", "data/abcnews-date-text.csv.gz",
+        "abcnews-date-text.csv",    "data/abcnews-date-text.csv",
     ]
     for p in candidates:
         if os.path.exists(p):
@@ -72,9 +66,8 @@ def find_data_path() -> str:
         "or a CSV at abcnews-date-text.csv[.gz]."
     )
 
-
 @st.cache_data(show_spinner=True)
-def load_vocab_from_txt(path: str):
+def load_vocab_from_txt(path: str) -> set:
     with open(path, "r", encoding="utf-8") as f:
         words = [w.strip() for w in f if w.strip()]
     return set(words)
@@ -94,7 +87,7 @@ def _tokenize_to_vocab(series: pd.Series) -> set:
     return vocab
 
 @st.cache_data(show_spinner=True)
-def build_vocab_from_csv(path: str, max_rows: int = None) -> set:
+def build_vocab_from_csv(path: str, max_rows: int | None = None) -> set:
     if path.endswith(".gz"):
         df = pd.read_csv(path, usecols=["headline_text"], compression="gzip")
     else:
@@ -107,7 +100,7 @@ def build_vocab_from_csv(path: str, max_rows: int = None) -> set:
 class NewsSpellChecker:
     def __init__(self, vocab: set):
         self.vocabulary = set(vocab)
-        self.by_first = {}
+        self.by_first: dict[str, list[str]] = {}
         for w in self.vocabulary:
             self.by_first.setdefault(w[0], []).append(w)
 
@@ -153,17 +146,17 @@ class NewsSpellChecker:
             return 0.0
         return sum(1 for x, y in zip(a[:m], b[:m]) if x == y) / m
 
-    def _candidate_space(self, w: str) -> list:
+    def _candidate_space(self, w: str) -> list[str]:
         primary = self.by_first.get(w[0].lower(), [])
         pool = primary if len(primary) >= 200 else list(self.vocabulary)
         max_diff = max(2, len(w) // 3, 3)
         return [c for c in pool if abs(len(c) - len(w)) <= max_diff]
 
-    def find_best(self, word: str, k: int = 5) -> list:
+    def find_best(self, word: str, k: int = 5) -> list[tuple[str, float]]:
         w = word.lower()
         if w in self.vocabulary:
             return [(w, 1.0)]
-        scored = []
+        scored: list[tuple[str, float]] = []
         for c in self._candidate_space(w):
             edit = 1 - (self._levenshtein_distance(w, c) / max(len(w), len(c)))
             bigr = self._bigram_sim(w, c)
@@ -174,9 +167,9 @@ class NewsSpellChecker:
         scored.sort(key=lambda t: t[1], reverse=True)
         return scored[:k]
 
-    def correct_text(self, text: str, thr: float = 0.7, topk: int = 5) -> dict:
+    def correct_text(self, text: str, thr: float = 0.7, topk: int = 5) -> dict[str, list[tuple[str, float]]]:
         tokens = re.findall(r"\b\w+\b", text.lower())
-        out = {}
+        out: dict[str, list[tuple[str, float]]] = {}
         seen = set()
         for t in tokens:
             if t in seen:
@@ -196,7 +189,7 @@ def match_case(suggestion: str, original: str) -> str:
         return suggestion.capitalize()
     return suggestion
 
-def apply_corrections(raw_text: str, corrections: dict) -> str:
+def apply_corrections(raw_text: str, corrections: dict[str, list[tuple[str, float]]]) -> str:
     parts = re.findall(r"\b\w+\b|[^\w\s]+|\s+", raw_text)  # words | punctuation | spaces
     out_parts = []
     for p in parts:
@@ -211,8 +204,7 @@ def apply_corrections(raw_text: str, corrections: dict) -> str:
             out_parts.append(p)
     return "".join(out_parts).strip()
 
-# ---------------- Bootstrap (prefer vocab.txt) ----------------
-@st.cache_resource(show_spinner=True)
+# ---------------- Bootstrap (prefer vocab .txt) ----------------
 @st.cache_resource(show_spinner=True)
 def load_checker():
     data_path = find_data_path()
@@ -231,6 +223,8 @@ def load_checker():
     checker = NewsSpellChecker(vocab)
     return checker, len(vocab), src, time.time() - t0
 
+# Load resources once (needed before UI uses vocab_size/vocab_src)
+checker, vocab_size, vocab_src, build_secs = load_checker()
 
 # ---------------- UI ----------------
 st.set_page_config(page_title="ABC News Spelling Helper", page_icon="📝", layout="centered")
@@ -262,5 +256,9 @@ if st.button("Check & Correct", type="primary"):
             st.subheader("Corrected Output")
             st.text_area("Result", value=final_text, height=150)
 
-        st.download_button("Download corrected text", data=final_text,
-                           file_name="corrected.txt", mime="text/plain")
+        st.download_button(
+            "Download corrected text",
+            data=final_text,
+            file_name="corrected.txt",
+            mime="text/plain",
+        )
