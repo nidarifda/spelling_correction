@@ -241,14 +241,16 @@ except Exception as e:
 st.markdown("""
 <style>
 :root{ --card:#fff; --muted:#6b7280; --border:#e5e7eb; --ink:#0f172a; }
-.block-container{ padding-top:1.0rem; padding-bottom:2rem; overflow:visible; }
+.block-container{ padding-top:0.75rem; padding-bottom:2rem; overflow:visible; }
 
-/* Hero */
-.hero{ background:linear-gradient(135deg,#ffffff 0%,#f7fafc 40%,#eef2ff 100%);
-  border:1px solid var(--border); border-radius:20px; padding:22px 24px 18px;
-  margin-bottom:16px; box-shadow:0 6px 22px rgba(16,24,40,.06); }
-.hero h1{ margin:0 0 6px 0; font-size:28px; font-weight:800; color:var(--ink); }
-.hero p{ margin:0; color:var(--muted); font-size:14px; }
+/* Hero (title only now) */
+.hero{
+  background:linear-gradient(135deg,#ffffff 0%,#f7fafc 40%,#eef2ff 100%);
+  border:1px solid var(--border); border-radius:20px;
+  padding:18px 22px 14px; margin-bottom:14px;
+  box-shadow:0 6px 22px rgba(16,24,40,.06);
+}
+.hero h1{ margin:0; font-size:28px; font-weight:800; color:var(--ink); }
 
 .card{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px; }
 .kpi{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px; }
@@ -264,6 +266,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ========================= Title (no subtitle box) =========================
+st.markdown("""
+<div class="hero">
+  <h1>SpellCheckr</h1>
+</div>
+""", unsafe_allow_html=True)
+
 # ========================= Sidebar (Settings) =========================
 with st.sidebar:
     st.header("Settings")
@@ -272,14 +281,6 @@ with st.sidebar:
     do_grammar = st.checkbox("Apply grammar correction (LanguageTool API)", value=st.session_state.get("do_grammar", True))
     st.caption(f"Source: **{vocab_src}** • Build: **{build_secs:.2f}s**")
     st.session_state.update({"thr":thr, "topk":topk, "do_grammar":do_grammar})
-
-# ========================= Hero =========================
-st.markdown("""
-<div class="hero">
-  <h1>SpellCheckr</h1>
-  <p>Paste your text on the left. Issues appear on the right. Preview & corrected output render below.</p>
-</div>
-""", unsafe_allow_html=True)
 
 # ========================= Main Two-Column Layout =========================
 DEFAULT_TEXT = "Goverment annouced new polcy to strenghten educattion secttor after critcal report."
@@ -297,13 +298,8 @@ with left:
     clear = c2.button("Reset", use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Preview will be rendered after processing; placeholder for layout
-    preview_container = st.container()
-    corrected_container = st.container()
-
 # ---------- RIGHT: Issues box (top) + Suggestions (below) ----------
 with right:
-    # Issues Detected (last run)
     issues = st.session_state.get("issues_count", 0)
     st.markdown(f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{issues}</p></div>""", unsafe_allow_html=True)
 
@@ -318,7 +314,6 @@ with right:
             chips = " ".join([f"<span class='badge'>{s} • {round(sc,3)}</span>" for s, sc in suggs])
             st.markdown(f"**{wrong}**  \n{chips}", unsafe_allow_html=True)
 
-        # Add to dictionary (below suggestions)
         add_select = st.multiselect(
             "Add words to custom dictionary:",
             options=sorted(list(suggestions.keys())),
@@ -327,10 +322,8 @@ with right:
         if st.button("Add selected", use_container_width=True):
             save_to_user_dict(set(add_select))
             st.success(f"Added {len(add_select)} word(s) to user_dict.txt")
-            # refresh checker to include new words
-            load_checker.clear()              # clear cached resource
+            load_checker.clear()
             checker, vocab_src, build_secs = load_checker()
-            # re-run to re-evaluate with updated vocab
             st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -372,7 +365,6 @@ def build_preview_html(raw: str, miss: set[str]) -> str:
     return "<div class='preview'>" + "".join(html_parts) + "</div>"
 
 with left:
-    # Result preview (below input)
     st.subheader("Preview")
     src_text = st.session_state.get("last_text", "")
     miss_set = set(st.session_state.get("suggestions", {}).keys())
@@ -381,7 +373,6 @@ with left:
     else:
         st.markdown('<div class="help">No input yet. Enter text above and run.</div>', unsafe_allow_html=True)
 
-    # Corrected output (below preview)
     st.subheader("Corrected Output")
     final_text = st.session_state.get("final_text", "")
     if final_text:
@@ -391,4 +382,7 @@ with left:
         st.markdown('<div class="help">Run **Check & Correct** to generate the corrected output.</div>', unsafe_allow_html=True)
 
 # ========================= Footer =========================
-st.markdown("<div class='help'>© SpellCheckr • Portfolio demo. Inline highlights indicate suspected misspellings; suggestions are ranked by a blended similarity score.</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='help'>© SpellCheckr • Portfolio demo. Inline highlights indicate suspected misspellings; suggestions are ranked by a blended similarity score.</div>",
+    unsafe_allow_html=True
+)
