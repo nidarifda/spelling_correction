@@ -5,36 +5,26 @@ if "last_text" not in st.session_state:
 
 left, right = st.columns([2, 1], vertical_alignment="top")
 
-# ---------- LEFT: Input ----------
+# ---------- LEFT: Input (top) ----------
 with left:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    text = st.text_area(
-        "Input text",
-        value=st.session_state["last_text"],
-        height=180,
-        key="input_text"
-    )
-    c1, c2 = st.columns([1, 1])
+    text = st.text_area("Input text", value=st.session_state["last_text"], height=180, key="input_text")
+    c1, c2 = st.columns([1,1])
     run = c1.button("Check & Correct", type="primary", use_container_width=True)
     clear = c2.button("Reset", use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------- RIGHT: Issues box + (conditional) Suggestions ----------
+# ---------- RIGHT: Issues box (top) + (only-if-present) Suggestions ----------
 with right:
     issues = st.session_state.get("issues_count", 0)
-    st.markdown(
-        f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{issues}</p></div>""",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{issues}</p></div>""", unsafe_allow_html=True)
 
     suggestions = st.session_state.get("suggestions", {})
     if suggestions:  # <-- render suggestions card ONLY when non-empty
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Suggestions")
         for wrong, suggs in suggestions.items():
-            chips = " ".join(
-                [f"<span class='badge'>{s} • {round(sc,3)}</span>" for s, sc in suggs]
-            )
+            chips = " ".join([f"<span class='badge'>{s} • {round(sc,3)}</span>" for s, sc in suggs])
             st.markdown(f"**{wrong}**  \n{chips}", unsafe_allow_html=True)
 
         add_select = st.multiselect(
@@ -84,9 +74,7 @@ def build_preview_html(raw: str, miss: set[str]) -> str:
         if re.fullmatch(r"\b\w+\b", t) and t.lower() in miss:
             html_parts.append(f'<span class="miss" title="See suggestions on the right">{t}</span>')
         else:
-            html_parts.append(
-                t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            )
+            html_parts.append(t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"))
     return "<div class='preview'>" + "".join(html_parts) + "</div>"
 
 with left:
