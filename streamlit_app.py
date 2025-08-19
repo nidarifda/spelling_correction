@@ -8,19 +8,24 @@ left, right = st.columns([2, 1], vertical_alignment="top")
 # ---------- LEFT: Input (top) ----------
 with left:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    text = st.text_area("Input text", value=st.session_state["last_text"], height=180, key="input_text")
-    c1, c2 = st.columns([1,1])
+    _ = st.text_area("Input text", value=st.session_state["last_text"], height=180, key="input_text")
+    c1, c2 = st.columns([1, 1])
     run = c1.button("Check & Correct", type="primary", use_container_width=True)
     clear = c2.button("Reset", use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------- RIGHT: Issues box (top) + (only-if-present) Suggestions ----------
+# ---------- RIGHT: Show NOTHING until there are suggestions ----------
 with right:
-    issues = st.session_state.get("issues_count", 0)
-    st.markdown(f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{issues}</p></div>""", unsafe_allow_html=True)
-
     suggestions = st.session_state.get("suggestions", {})
-    if suggestions:  # <-- render suggestions card ONLY when non-empty
+    issues = st.session_state.get("issues_count", 0)
+
+    # Only show KPI + Suggestions when there are actual issues
+    if issues > 0 and suggestions:
+        st.markdown(
+            f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{issues}</p></div>""",
+            unsafe_allow_html=True
+        )
+
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Suggestions")
         for wrong, suggs in suggestions.items():
@@ -38,7 +43,9 @@ with right:
             load_checker.clear()
             checker, vocab_src, build_secs = load_checker()
             st.rerun()
+
         st.markdown('</div>', unsafe_allow_html=True)
+    # else: render nothing (no empty boxes)
 
 # ========================= Run / Reset Actions =========================
 if clear:
