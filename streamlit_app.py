@@ -138,8 +138,7 @@ class NewsSpellChecker:
         A, B = cls._bigrams(a), cls._bigrams(b)
         if not A or not B:
             return 0.0
-        inter = len(A & B)
-        union = len(A | B)
+        inter = len(A & B); union = len(A | B)
         return inter / union if union else 0.0
 
     @staticmethod
@@ -251,7 +250,7 @@ st.markdown("""
 .hero p{ margin:0; color:var(--muted); font-size:14px; }
 
 .card{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px; }
-.kpi{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px; }
+.kpi{ background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px; min-height:84px; }
 .kpi h3{ margin:0; font-size:13px; font-weight:600; color:var(--muted); }
 .kpi p{ margin:6px 0 0; font-size:26px; font-weight:800; color:var(--ink); }
 
@@ -261,6 +260,10 @@ st.markdown("""
   padding:4px 8px; border-radius:999px; font-size:12px; margin:2px 6px 2px 0; }
 .help{ color:var(--muted); font-size:13px; }
 .stButton > button[kind="primary"]{ background:#0f172a; border-radius:10px; height:44px; }
+
+/* tighter overall spacing */
+section.main > div.block-container { padding-top:.75rem; }
+h2, h3, .stSubheader { margin-bottom:.25rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -281,12 +284,21 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ========================= Decide column layout =========================
+has_suggestions = bool(st.session_state.get("suggestions"))
+has_issues_box  = (st.session_state.get("issues_count", 0) > 0)
+show_right_col  = has_suggestions or has_issues_box
+
 # ========================= Main Two-Column Layout =========================
 DEFAULT_TEXT = "Goverment annouced new polcy to strenghten educattion secttor after critcal report."
 if "last_text" not in st.session_state:
     st.session_state["last_text"] = DEFAULT_TEXT
 
-left, right = st.columns([2, 1], vertical_alignment="top")
+if show_right_col:
+    left, right = st.columns([2, 1], vertical_alignment="top")
+else:
+    left = st.container()
+    right = None
 
 # ---------- LEFT: Input (top) + Preview (below) + Corrected Output (below) ----------
 with left:
@@ -297,42 +309,40 @@ with left:
     clear = c2.button("Reset", use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Preview will be rendered after processing; placeholder for layout
+    # placeholders (optional)
     preview_container = st.container()
     corrected_container = st.container()
 
 # ---------- RIGHT: Issues box (top) + Suggestions (below) ----------
-with right:
-    # Issues Detected (last run)
-    issues = st.session_state.get("issues_count", 0)
-    st.markdown(f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{issues}</p></div>""", unsafe_allow_html=True)
+if right is not None:
+    with right:
+        issues = st.session_state.get("issues_count", 0)
+        st.markdown(f"""<div class="kpi"><h3>Issues Detected (last run)</h3><p>{issues}</p></div>""", unsafe_allow_html=True)
 
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("Suggestions")
-    suggestions = st.session_state.get("suggestions", {})
-    if not suggestions:
-        st.markdown('<div class="help">No issues found on last run.</div>', unsafe_allow_html=True)
-        add_select = []
-    else:
-        for wrong, suggs in suggestions.items():
-            chips = " ".join([f"<span class='badge'>{s} • {round(sc,3)}</span>" for s, sc in suggs])
-            st.markdown(f"**{wrong}**  \n{chips}", unsafe_allow_html=True)
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("Suggestions")
+        suggestions = st.session_state.get("suggestions", {})
 
-        # Add to dictionary (below suggestions)
-        add_select = st.multiselect(
-            "Add words to custom dictionary:",
-            options=sorted(list(suggestions.keys())),
-            placeholder="Select words to remember"
-        )
-        if st.button("Add selected", use_container_width=True):
-            save_to_user_dict(set(add_select))
-            st.success(f"Added {len(add_select)} word(s) to user_dict.txt")
-            # refresh checker to include new words
-            load_checker.clear()              # clear cached resource
-            checker, vocab_src, build_secs = load_checker()
-            # re-run to re-evaluate with updated vocab
-            st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
+        if not suggestions:
+            st.markdown('<div class="help">No issues found on last run.</div>', unsafe_allow_html=True)
+            add_select = []
+        else:
+            for wrong, suggs in suggestions.items():
+                chips = " ".join([f"<span class='badge'>{s} • {round(sc,3)}</span>" for s, sc in suggs])
+                st.markdown(f"**{wrong}**  \n{chips}", unsafe_allow_html=True)
+
+            add_select = st.multiselect(
+                "Add words to custom dictionary:",
+                options=sorted(list(suggestions.keys())),
+                placeholder="Select words to remember"
+            )
+            if st.button("Add selected", use_container_width=True):
+                save_to_user_dict(set(add_select))
+                st.success(f"Added {len(add_select)} word(s) to user_dict.txt")
+                load_checker.clear()
+                checker, vocab_src, build_secs = load_checker()
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # ========================= Run / Reset Actions =========================
 if clear:
@@ -372,7 +382,6 @@ def build_preview_html(raw: str, miss: set[str]) -> str:
     return "<div class='preview'>" + "".join(html_parts) + "</div>"
 
 with left:
-    # Result preview (below input)
     st.subheader("Preview")
     src_text = st.session_state.get("last_text", "")
     miss_set = set(st.session_state.get("suggestions", {}).keys())
@@ -381,7 +390,6 @@ with left:
     else:
         st.markdown('<div class="help">No input yet. Enter text above and run.</div>', unsafe_allow_html=True)
 
-    # Corrected output (below preview)
     st.subheader("Corrected Output")
     final_text = st.session_state.get("final_text", "")
     if final_text:
