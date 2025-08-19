@@ -281,7 +281,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ========================= Main Two-Column Layout =========================
+# ========================= Initialize Session State =========================
 DEFAULT_TEXT = "Government announced new policy to strengthen education sector after critical report."
 if "last_text" not in st.session_state:
     st.session_state["last_text"] = DEFAULT_TEXT
@@ -292,6 +292,22 @@ if "issues_count" not in st.session_state:
 if "final_text" not in st.session_state:
     st.session_state["final_text"] = ""
 
+# Pre-run the checker on initial load to populate results
+if checker and st.session_state["last_text"] and not st.session_state.get("initialized"):
+    thr = st.session_state["thr"]
+    topk = st.session_state["topk"]
+    suggestions = checker.correct_text(st.session_state["last_text"], thr=thr, topk=topk)
+    corrected = apply_corrections(st.session_state["last_text"], suggestions)
+    final_text = grammar_correct(corrected) if st.session_state["do_grammar"] else corrected
+
+    st.session_state.update({
+        "suggestions": suggestions,
+        "final_text": final_text,
+        "issues_count": len(suggestions),
+        "initialized": True
+    })
+
+# ========================= Main Two-Column Layout =========================
 left, right = st.columns([2, 1], vertical_alignment="top")
 
 # ---------- LEFT: Input (top) + Preview (below) + Corrected Output (below) ----------
@@ -342,8 +358,6 @@ with right:
 
 # ========================= Run / Reset Actions =========================
 if clear:
-    for k in ["suggestions", "final_text", "issues_count", "last_text"]:
-        st.session_state.pop(k, None)
     st.session_state["last_text"] = DEFAULT_TEXT
     st.session_state["suggestions"] = {}
     st.session_state["issues_count"] = 0
