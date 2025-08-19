@@ -282,9 +282,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ========================= Main Two-Column Layout =========================
-DEFAULT_TEXT = "Goverment annouced new polcy to strenghten educattion secttor after critcal report."
+DEFAULT_TEXT = "Government announced new policy to strengthen education sector after critical report."
 if "last_text" not in st.session_state:
     st.session_state["last_text"] = DEFAULT_TEXT
+if "suggestions" not in st.session_state:
+    st.session_state["suggestions"] = {}
+if "issues_count" not in st.session_state:
+    st.session_state["issues_count"] = 0
+if "final_text" not in st.session_state:
+    st.session_state["final_text"] = ""
 
 left, right = st.columns([2, 1], vertical_alignment="top")
 
@@ -339,6 +345,9 @@ if clear:
     for k in ["suggestions", "final_text", "issues_count", "last_text"]:
         st.session_state.pop(k, None)
     st.session_state["last_text"] = DEFAULT_TEXT
+    st.session_state["suggestions"] = {}
+    st.session_state["issues_count"] = 0
+    st.session_state["final_text"] = ""
     st.rerun()
 
 if run:
@@ -385,7 +394,7 @@ with left:
     st.subheader("Corrected Output")
     final_text = st.session_state.get("final_text", "")
     if final_text:
-        st.text_area("Result", value=final_text, height=160, key="final_text_area")
+        st.text_area("Result", value=final_text, height=160, key="final_text_area", label_visibility="collapsed")
         st.download_button("Download corrected text", data=final_text, file_name="corrected.txt", mime="text/plain")
     else:
         st.markdown('<div class="help">Run **Check & Correct** to generate the corrected output.</div>', unsafe_allow_html=True)
